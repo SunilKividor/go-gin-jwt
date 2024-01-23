@@ -11,4 +11,5 @@ var auth = controllers.NewAuth()
 func AuthRoutes(r *gin.Engine) {
 	r.POST("/auth/signup", auth.SignUp)
 	r.POST("/auth/login", auth.Login)
+	r.GET("/user/getall", auth.GetAllUsers)
 }
