@@ -4,7 +4,7 @@ import (
 	"context"
 	"go-gin-jwt/database"
 	"go-gin-jwt/helper"
-	"go-gin-jwt/models"
+	models "go-gin-jwt/models/auth"
 	"log"
 	"net/http"
 	"time"
