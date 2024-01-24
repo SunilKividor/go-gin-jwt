@@ -7,9 +7,11 @@ import (
 	models "go-gin-jwt/models/auth"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/golang-jwt/jwt/v5"
 	"go.mongodb.org/mongo-driver/bson"
 	"golang.org/x/crypto/bcrypt"
 )
@@ -117,6 +119,107 @@ func (auth *auth) Login(c *gin.Context) {
 	if !verifyPassword(user.Password, body.Password) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "Incorrect password",
+		})
+		return
+	}
+
+	//generate new tokens
+	accessToken, refeshToken, err := helper.GenerateAllTokens(body.Username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to create tokens",
+		})
+		return
+	}
+
+	//update user
+	user.AccesToken = accessToken
+	user.RefreshToken = refeshToken
+
+	//update user in database
+	filter = bson.D{{Key: "username", Value: body.Username}}
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "access_token", Value: accessToken},
+		{Key: "refresh_token", Value: refeshToken},
+	}}}
+	defer cancel()
+	_, err = collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Failed to update tokens",
+		})
+		return
+	}
+
+	//send access and refresh tokens
+	res := models.ResponseBody{
+		Username:     user.Username,
+		AccesToken:   user.AccesToken,
+		RefreshToken: user.RefreshToken,
+	}
+
+	c.JSON(http.StatusOK, res)
+}
+
+func (auth *auth) RefreshAccessToken(c *gin.Context) {
+	//get the refresh token and username
+	signedRefresh := c.Request.Header.Get("refresh_token")
+	username := c.Query("username")
+	log.Println(username)
+
+	//validate the token
+	token, err := jwt.ParseWithClaims(signedRefresh, &helper.Claims{}, func(t *jwt.Token) (interface{}, error) {
+		return []byte(os.Getenv("SECRET")), nil
+	})
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	//find the user in database
+	var user models.User
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	collection := database.OpenCollection(database.Client, "users")
+	filter := bson.D{{Key: "username", Value: username}}
+	err = collection.FindOne(ctx, filter).Decode(&user)
+	defer cancel()
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "no such user exist",
+		})
+		return
+	}
+
+	//check if token provided and received is same
+	if user.RefreshToken != token.Raw {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Invalid Refresh Token",
+		})
+		return
+	}
+
+	//generate access token
+	accessToken, _, err := helper.GenerateAllTokens(username)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Failed to generate tokens",
+		})
+		return
+	}
+
+	user.AccesToken = accessToken
+
+	//update token is database
+	update := bson.D{{Key: "$set", Value: bson.D{
+		{Key: "access_token", Value: accessToken},
+	}}}
+	defer cancel()
+	_, err = collection.UpdateOne(ctx, filter, update)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Failed to update tokens",
 		})
 		return
 	}
